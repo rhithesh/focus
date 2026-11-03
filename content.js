@@ -121,17 +121,26 @@
 
   const x = {
     name: "x",
-    selector: 'article[data-testid="tweet"]',
+    // X's current markup renders no data-testid attributes — posts are plain
+    // <article>s inside <main>. The testid selector keeps older builds matching.
+    selector: 'main article, article[data-testid="tweet"]',
 
     extract(el) {
-      // The post's own permalink is the status link wrapping its timestamp.
-      const stamp = [...el.querySelectorAll('a[href*="/status/"]')].find((a) => a.querySelector("time"));
-      const m = stamp?.getAttribute("href")?.match(/\/status\/(\d+)/);
-      if (!m) return null;
+      // The post's own permalink is the first plain /user/status/<id> link: the
+      // one on its timestamp or reply button, which sits before any quoted post's.
+      const hrefs = [...el.querySelectorAll('a[href]')].map((a) => a.getAttribute("href"));
+      const m =
+        hrefs.find((h) => /^\/[^/]+\/status\/\d+$/.test(h))?.match(/\/status\/(\d+)/) ||
+        el.querySelector('a[href*="in_reply_to="]')?.getAttribute("href")?.match(/in_reply_to=(\d+)/);
+      if (!m) return null; // sponsored posts carry no permalink — out of reach, as before
 
-      const body = richText(el.querySelector('[data-testid="tweetText"]'));
+      // Post text: the testid body when the old UI renders it, otherwise the link
+      // card, else — on the current testid-less markup — the article's text with
+      // the quoted post inside dropped. The old markup's media-only posts get no
+      // text at all, so the image pass judges them.
+      const own = el.querySelector('[data-testid="tweetText"]');
       const card = text(el.querySelector('[data-testid="card.wrapper"]'));
-      const content = body || card;
+      const content = own ? richText(own) : card || (testidPost(el) ? "" : richText(outerPost(el)));
       const image = xImage(el);
       if (!content && !(image && lookingAtImages())) return null; // media-only post, and pictures aren't being judged
 
@@ -141,15 +150,38 @@
         platform: "x",
         title: clip(content),
         image,
-        author: text(el.querySelector('[data-testid="User-Name"]')),
+        author: xName(el),
         meta: [text(el.querySelector('[data-testid="socialContext"]')), counts].filter(Boolean).join(" · "),
         surface: "x",
       };
     },
   };
 
+  // Posts of the pre-2026 markup carry the tweet testids; the current one renders none.
+  const testidPost = (el) => el.matches('article[data-testid="tweet"]') && !!el.querySelector('[data-testid="User-Name"], [data-testid="tweetText"], [data-testid="tweetPhoto"]');
+
+  // The display name: the testid block if the old UI renders it, else the first
+  // profile link (/handle) that carries visible text.
+  function xName(el) {
+    const named = el.querySelector('[data-testid="User-Name"]');
+    if (named) return text(named);
+    const a = [...el.querySelectorAll("a[href]")].find(
+      (n) => /^\/[A-Za-z0-9_]{1,20}$/.test(n.getAttribute("href") || "") && clean(n.textContent).length > 1
+    );
+    return clean(a?.textContent);
+  }
+
+  // A detached copy of the post with quoted articles and the reply/action buttons
+  // removed, so quote text and bare counts aren't judged as part of the post.
+  function outerPost(el) {
+    const copy = el.cloneNode(true);
+    copy.querySelectorAll("article, button").forEach((n) => n.remove());
+    copy.querySelectorAll('a[href*="in_reply_to="]').forEach((n) => n.remove());
+    return copy;
+  };
+
   function xImage(el) {
-    const url = mediaUrl(el, '[data-testid="tweetPhoto"] img, [data-testid="videoPlayer"] video[poster], [data-testid="card.wrapper"] img');
+    const url = mediaUrl(el, '[data-testid="tweetPhoto"] img, [data-testid="videoPlayer"] video[poster], [data-testid="card.wrapper"] img, img[src*="pbs.twimg.com/media/"]');
     // Ask X's image server for a small JPEG rather than WebP.
     if (!url.startsWith("https://pbs.twimg.com/media/")) return url;
     const u = new URL(url);
@@ -217,6 +249,10 @@
   let flushTimer = null;
   let scanTimer = null;
   let blockedCount = 0;
+  let counted = new Set(); // item ids already filed into the week tally this session
+  let badgeSent = -1; // last page count reported to the badge, to skip duplicate messages
+  let toastSeen = null; // storage key not read yet: null. true/false once known.
+  let toastShown = false;
   let dead = false; // true once the extension is reloaded/updated out from under this tab
   let observer = null;
   let intervalId = null;
@@ -500,11 +536,16 @@
     if (!alive()) { die(); return; }
     if (!settings || !settings.enabled) {
       blockedCount = 0;
+      if (badgeSent !== 0) {
+        badgeSent = 0;
+        safeSend({ type: "page", badge: 0, hidden: 0 }, () => {});
+      }
       pill.render();
       return;
     }
 
     let blocked = 0;
+    let freshHidden = 0;
     for (const el of document.querySelectorAll(site.selector)) {
       // Take only the outermost item — several of these selectors nest.
       if (el.parentElement?.closest(site.selector)) continue;
@@ -533,6 +574,8 @@
         if (verdict.tag) {
           applyBlock(el);
           blocked++;
+          // File each hidden item into the week's tally once per tab session.
+          if (!counted.has(info.id)) { counted.add(info.id); freshHidden++; }
         } else {
           clearBlock(el);
         }
@@ -545,6 +588,11 @@
 
     blockedCount = blocked;
     pill.render();
+    if (freshHidden || blocked !== badgeSent) {
+      badgeSent = blocked;
+      safeSend({ type: "page", badge: blocked, hidden: freshHidden }, () => {});
+    }
+    maybeToast(blocked);
     if (pending.size) scheduleFlush();
   }
 
@@ -573,6 +621,114 @@
       for (const [id, v] of Object.entries(res.verdicts || {})) verdicts.set(id, v);
       scan();
     });
+  }
+
+  /* ------------------------------------------------------- first-run toast */
+
+  // The one moment the product is visible without opening the popup: the first
+  // scan that hides something, once per install. Without a goal set, it doubles
+  // as a nudge to the welcome page — that's the reactivation path for old installs.
+  function maybeToast(blocked) {
+    if (toastShown || toastSeen !== false || !settings || dead || !document.body) return;
+    const goalless = !settings.goals?.trim();
+    // With no goal the keyword rules alone hide less; wait for a count that means something.
+    if (blocked < (goalless ? 3 : 1)) return;
+    toastShown = true;
+    showToast(blocked, goalless);
+    try { chrome.storage.local.set({ toastDone: Date.now() }); } catch { if (!alive()) die(); }
+  }
+
+  function showToast(n, goalless) {
+    const host = document.createElement("div");
+    host.setAttribute("data-ygf-toast", "");
+    const root = host.attachShadow({ mode: "open" });
+
+    const style = document.createElement("style");
+    style.textContent = `
+      :host { all: initial; position: fixed; top: 18px; left: 50%; z-index: 2147483645; }
+      .toast {
+        transform: translateX(-50%) translateY(-16px); opacity: 0;
+        transition: transform .35s cubic-bezier(.2,1,.3,1), opacity .35s;
+      }
+      .in { transform: translateX(-50%) translateY(0); opacity: 1; }
+      .card {
+        display: flex; align-items: center; gap: 10px;
+        max-width: min(480px, 92vw);
+        padding: 12px 14px;
+        background: #16150f; color: #f3f0e8;
+        border-radius: 14px;
+        box-shadow: 0 16px 44px -14px rgba(0,0,0,.55), 0 0 0 1px rgba(243,240,232,.1);
+        font: 400 13.5px/1.45 "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      }
+      .logo { display: block; width: 22px; height: 22px; flex: none; }
+      b { color: #c9f25d; font-weight: 500; font-variant-numeric: tabular-nums; }
+      em { font-style: italic; }
+      .link { text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+      .close {
+        all: unset; cursor: pointer; flex: none;
+        width: 22px; height: 22px; border-radius: 50%;
+        color: rgba(243,240,232,.55); text-align: center; line-height: 22px;
+      }
+      .close:hover { color: #f3f0e8; background: rgba(243,240,232,.12); }
+    `;
+
+    const svgNS = "http://www.w3.org/2000/svg";
+    const logo = document.createElementNS(svgNS, "svg");
+    logo.setAttribute("viewBox", "0 0 24 24");
+    logo.setAttribute("class", "logo");
+    logo.setAttribute("aria-hidden", "true");
+    for (const [y, w, f] of [["6.5", "12", "#c9f25d"], ["10.8", "12", "#f3f0e8"], ["15.1", "8", "#c9f25d"]]) {
+      const r = document.createElementNS(svgNS, "rect");
+      for (const [k, v] of Object.entries({ x: "6", y, width: w, height: "2.4", rx: "1.2", fill: f })) r.setAttribute(k, v);
+      logo.append(r);
+    }
+
+    const span = document.createElement("span");
+    span.innerHTML = ""; // built below with DOM calls; no page HTML ever parsed
+    if (goalless) {
+      const b = document.createElement("b");
+      b.textContent = String(n);
+      span.append("Feed Filter is hiding ", b, " things here. ");
+      const link = document.createElement("a");
+      link.textContent = "Pick a goal";
+      link.className = "link";
+      link.addEventListener("click", () => { safeSend({ type: "openWelcome" }, () => {}); hide(); });
+      span.append(link, " to tune what stays hidden.");
+    } else {
+      const b = document.createElement("b");
+      b.textContent = String(n);
+      span.append("Feed Filter hid ", b, " things on this feed");
+      const em = document.createElement("em");
+      em.textContent = "— hover one to see through.";
+      span.append(" ", em);
+    }
+
+    const close = document.createElement("button");
+    close.className = "close";
+    close.textContent = "✕";
+    close.setAttribute("aria-label", "Dismiss");
+    close.addEventListener("click", hide);
+
+    const card = document.createElement("div");
+    card.className = "card";
+    card.append(logo, span, close);
+
+    const outer = document.createElement("div");
+    outer.className = "toast";
+    outer.append(card);
+    root.append(style, outer);
+
+    let gone = false;
+    function hide() {
+      if (gone) return;
+      gone = true;
+      outer.classList.remove("in");
+      setTimeout(() => host.remove(), 400);
+    }
+
+    document.body.appendChild(host);
+    requestAnimationFrame(() => outer.classList.add("in"));
+    setTimeout(hide, 14_000);
   }
 
   /* ----------------------------------------------------------------- boot */
@@ -607,6 +763,18 @@
       start();
     }
   });
+
+  // Whether the one-per-install toast has already been spent.
+  try {
+    chrome.storage.local.get("toastDone", (r) => {
+      try {
+        toastSeen = !!r?.toastDone;
+        scan(); // the flag may have arrived after a scan that passed the threshold
+      } catch { if (!alive()) die(); }
+    });
+  } catch {
+    die();
+  }
 
   try {
     chrome.storage.onChanged.addListener((changes, area) => {

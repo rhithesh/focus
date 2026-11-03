@@ -32,7 +32,7 @@ const HOSTS = {
 // What each fixture item should end up as. Items not listed must not be judged at all.
 const EXPECT = {
   "www.youtube.com": { bait: true, clean: false },
-  "x.com": { bait: true, spam: true, clean: false, media: false },
+  "x.com": { bait: true, spam: true, clean: false, media: false, baitN: true, cleanN: false, quoteN: false, quoteInner: false },
   "www.linkedin.com": { bait: true, spam: true, clean: false },
 };
 
@@ -226,7 +226,7 @@ try {
       const all = await chrome.storage.local.get(null);
       return Object.entries(all).filter(([k, v]) => k.startsWith("v:") && v.d?.source === "jev-free-mock").length >= 8;
     })()`, swSession, 15000);
-    check(judged, "after the 429 and its Retry-After, all judged items were re-asked and cached from the free tier (8 items)");
+    check(judged, "after the 429 and its Retry-After, all judged items were re-asked and cached from the free tier (11 items)");
     const st = await evaluate(`chrome.storage.local.get(["freeUsage", "freePausedUntil"])`, swSession);
     check(st.freePausedUntil > 0, "the 429 paused free calls (freePausedUntil was set)");
     check(!st.freeUsage, "once answers come back with no allowance headers (no daily limit), no allowance is tracked");

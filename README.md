@@ -10,14 +10,18 @@ typed answers with calibrated probabilities instead of prose.
 ## Install
 
 1. Add it from the [Chrome Web Store](https://chromewebstore.google.com/detail/mfcjcbmgdedipgjenjcalfmmdnoejaik).
-2. The settings page opens on install. Write your goals, hit **Run a test call**, then
-   **Save**. A key is optional: without one, the free tier (below) is used.
+2. Onboarding opens first: pick a goal (or write your own) and it drops you onto
+   YouTube with the filter live — one click, no settings wall.
 3. Reload any open YouTube, X or LinkedIn tab.
 
 To run from source instead: `chrome://extensions` → enable **Developer mode** →
 **Load unpacked** → pick this folder. In Firefox (140 or later): `about:debugging` → **This
 Firefox** → **Load Temporary Add-on** → pick `manifest.json`. The same files and manifest
 work in both browsers.
+
+The toolbar popup also shows the week's tally — how many items the filter has hidden
+Mon–Mon — plus the all-time total and this page's count. The toolbar badge mirrors
+this page's count.
 
 Turn filtering on or off from the toolbar popup, or from the small switch that floats
 on YouTube, X and LinkedIn pages (drag it anywhere; it remembers where). Hide that

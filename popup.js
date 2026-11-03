@@ -7,7 +7,12 @@ async function init() {
   $("#enabled").checked = !!settings.enabled;
   showState(!!settings.enabled);
 
-  $("#goals").textContent = settings.goals?.trim() || "No goals set yet — open settings and describe what you want out of your feeds.";
+  if (!settings.onboarded) {
+    $("#goals").textContent = "Pick a goal so the filter knows what your feeds are for.";
+    $("#open").textContent = "Pick your goal →";
+  } else {
+    $("#goals").textContent = settings.goals?.trim() || "No goals — hiding obvious bait, spam and slop.";
+  }
 
   const { lastError, freeUsage, freePausedUntil } = await chrome.storage.local.get(["lastError", "freeUsage", "freePausedUntil"]);
   const recentError = lastError && Date.now() - lastError.at < 10 * 60 * 1000;
@@ -28,6 +33,15 @@ async function init() {
     else showNote("Free · no daily limit.");
   } else if (recentError) {
     show(lastError.msg);
+  }
+
+  const week = (await chrome.storage.local.get("stats")).stats;
+  const n = week?.hidden || 0;
+  $("#weekN").textContent = n.toLocaleString();
+  if (week?.total > 0) {
+    const t = $("#totalN");
+    t.hidden = false;
+    t.textContent = "all time " + week.total.toLocaleString();
   }
 
   // tab.url is hidden without the "tabs" permission, so ask the tab directly;
@@ -71,6 +85,13 @@ $("#enabled").addEventListener("change", (e) => {
   showState(e.target.checked);
 });
 
-$("#open").addEventListener("click", () => chrome.runtime.openOptionsPage());
+// Un-onboarded installs land on the welcome page; everyone else gets the full settings.
+$("#open").addEventListener("click", () => {
+  if (!settings?.onboarded) {
+    try { chrome.runtime.sendMessage({ type: "openWelcome" }); } catch {}
+    return;
+  }
+  chrome.runtime.openOptionsPage();
+});
 
 init();

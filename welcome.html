@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Feed Filter — first run</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="welcome.css">
+</head>
+<body>
+<main>
+  <header>
+    <p class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="7" fill="#16150f"/><rect x="6" y="6.5" width="12" height="2.4" rx="1.2" fill="#c9f25d"/><rect x="6" y="10.8" width="12" height="2.4" rx="1.2" fill="#f3f0e8" opacity=".28"/><rect x="6" y="15.1" width="8" height="2.4" rx="1.2" fill="#c9f25d"/></svg>Feed Filter</p>
+    <h1>What are your feeds <em>for?</em></h1>
+    <p class="sub">Pick the reason you open YouTube, X or LinkedIn. Mouths to feed later, and the
+      model uses it to blur whatever isn't that. One click &mdash; you can refine it any time.</p>
+  </header>
+
+  <section class="presets" id="presets"></section>
+
+  <section class="custom">
+    <button id="customToggle" type="button">Or write your own &rarr;</button>
+    <div id="customBody" hidden>
+      <label class="field">
+        <textarea id="goals" rows="5" placeholder="e.g. I'm learning systems programming and want to go deep on Rust, databases and distributed systems. I also follow AI research seriously — papers and real implementations, not commentary. I do NOT want tech drama, reaction videos, news-of-the-week, or gaming."></textarea>
+        <span class="hint">Say what you want <em>and</em> what you don&rsquo;t. Negatives are the strongest signal.</span>
+      </label>
+    </div>
+  </section>
+
+  <footer>
+    <button id="go" class="btn btn--primary" disabled>Open YouTube and watch it work</button>
+    <p class="links">
+      <button id="advanced" type="button">Advanced settings (thresholds, surfaces, your own API key)</button>
+      <button id="skip" type="button">Skip &mdash; hide obvious spam only</button>
+    </p>
+  </footer>
+</main>
+<script src="welcome.js"></script>
+</body>
+</html>

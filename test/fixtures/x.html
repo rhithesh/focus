@@ -24,4 +24,22 @@ The 4th one will blow your mind </span><img class="emoji" alt="🤯" src="data:i
   <div data-testid="User-Name"><a href="/photos"><span>Photo Account</span></a><a href="/photos"><span>@photos</span></a><a href="/photos/status/1790000000000000004"><time datetime="2026-09-26T09:30:00Z">30m</time></a></div>
   <div data-testid="tweetPhoto" style="height:120px;background:#ccc"><img alt="Image" src="https://pbs.twimg.com/media/GTestMediaId?format=webp&amp;name=900x900" style="height:120px"></div>
 </article></div>
+<!-- X's current markup: no data-testid anywhere, posts are plain articles in main -->
+<div><article class="flex flex-col gap-1" id="baitN">
+  <div class="flex gap-2"><a href="/growthguru"><span>Growth Guru</span></a><a href="/growthguru/status/1790000000000000005"><span>5h</span></a></div>
+  <div><span>99% of people don't know this one trick. Follow me for more 🚀🚀</span></div>
+</article></div>
+<div><article class="flex flex-col gap-1" id="cleanN">
+  <div class="flex gap-2"><a href="/mira_code"><span>Mira Chen</span></a><a href="/mira_code/status/1790000000000000006"><span>2h</span></a></div>
+  <div><span>Wrote up the cache-invalidation notes from last week's design review.</span></div>
+</article></div>
+<!-- a quoted post: only the outer article may be judged -->
+<div><article class="flex flex-col gap-1" id="quoteN">
+  <div class="flex gap-2"><a href="/dana_devs"><span>Dana Wolfe</span></a><a href="/dana_devs/status/1790000000000000007"><span>1h</span></a></div>
+  <div><span>Every dev should read this cache write-up.</span></div>
+  <div><article class="flex flex-col gap-1" id="quoteInner">
+    <div class="flex gap-2"><a href="/sol_rewards_io2"><span>Growth Guru</span></a><a href="/sol_rewards_io2/status/1790000000000000008"><span>3h</span></a></div>
+    <div><span>FREE $SOL AIRDROP. Claim now.</span></div>
+  </article></div>
+</article></div>
 </main></body></html>

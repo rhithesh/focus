@@ -768,6 +768,41 @@ async function testLook(s) {
   }
 }
 
+/* ---------------------------------------------------- badge + habit loop */
+
+// The badge counts what the filter is hiding on the tab it's shown for — product
+// feedback in the one place the user already looks when they wonder about it.
+function setBadge(tabId, n) {
+  try {
+    chrome.action.setBadgeText({ tabId, text: n > 0 ? String(Math.min(n, 999)) : "" });
+  } catch { /* tab may have closed mid-flight */ }
+}
+
+try {
+  chrome.action.setBadgeBackgroundColor({ color: "#16150f" });
+  if (chrome.action.setBadgeTextColor) chrome.action.setBadgeTextColor({ color: "#c9f25d" });
+  // A navigation resets the page count; the content script files a fresh one within a second.
+  chrome.tabs.onUpdated.addListener((tabId, info) => {
+    if (info.status === "loading") setBadge(tabId, 0);
+  });
+} catch { /* no action badge in some embedders */ }
+
+// Rolling tally of what got hidden, Monday to Monday UTC, plus an all-time total.
+// The popup shows both; the toast and the badge make the filtering felt.
+async function addHidden(n) {
+  if (!n) return;
+  const { stats } = await chrome.storage.local.get("stats");
+  const monday = new Date(Date.now() - ((new Date().getUTCDay() + 6) % 7) * 864e5).toISOString().slice(0, 10);
+  const cur = stats?.week === monday ? stats : { week: monday, hidden: 0, total: 0 };
+  cur.hidden += n;
+  cur.total = (cur.total || 0) + n;
+  await chrome.storage.local.set({ stats: cur });
+}
+
+function openWelcome() {
+  chrome.tabs.create({ url: chrome.runtime.getURL("welcome.html") });
+}
+
 /* ---------------------------------------------------------------- plumbing */
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -780,6 +815,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "settings") {
     getSettings().then(sendResponse);
     return true;
+  }
+  if (msg?.type === "page") {
+    // Content script's per-scan report: how many tiles are hidden on this tab right now,
+    // and how many newly hidden ones should join the week's tally.
+    if (sender.tab?.id != null) setBadge(sender.tab.id, msg.badge || 0);
+    addHidden(msg.hidden || 0).catch(() => {});
+    return false;
+  }
+  if (msg?.type === "openWelcome") {
+    openWelcome();
+    sendResponse({ ok: true });
+    return false;
   }
   if (msg?.type === "test") {
     handleTest(msg.goals).then(sendResponse);
@@ -800,7 +847,8 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   if (reason === "update") await chrome.storage.local.remove(["freePausedUntil", "freeUsage"]);
   if (reason !== "install") return;
   await chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS } });
-  chrome.runtime.openOptionsPage();
+  // Onboarding, not a settings wall: pick a goal, then watch it work on a real feed.
+  openWelcome();
 });
 
 // Exported for the offline shape test in test/validate.mjs. Unused at runtime.
