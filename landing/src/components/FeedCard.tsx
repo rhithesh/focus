@@ -206,7 +206,7 @@ export function FeedCard({
         animate={{ opacity: veiled ? 1 : 0 }}
         transition={t}
       />
-      {blurred && <span className="sr-only">Blurred by Feed Filter.</span>}
+      {blurred && <span className="sr-only">Blurred by Focus.</span>}
     </motion.article>
   );
 }

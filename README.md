@@ -1,4 +1,4 @@
-# Feed Filter — goal-aligned feeds
+# Focus — goal-aligned feeds
 
 A Chrome extension that blurs YouTube videos, X posts and LinkedIn posts that are
 clickbait, spam, or irrelevant to goals you write yourself. Hover one and the blur lifts so you can read

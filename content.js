@@ -385,13 +385,16 @@
 
     function logo() {
       const SVG = "http://www.w3.org/2000/svg";
-      const bar = (y, w, fill, extra = {}) =>
-        el("rect", { x: "6", y, width: w, height: "2.4", rx: "1.2", fill, ...extra }, [], SVG);
+      const bracket = (d) =>
+        el("path", { d, fill: "none", stroke: "#ffffff", "stroke-width": "1.9", "stroke-linecap": "round" }, [], SVG);
       return el("svg", { class: "logo", viewBox: "0 0 24 24", "aria-hidden": "true" }, [
         el("rect", { width: "24", height: "24", rx: "12", fill: "#2a2920" }, [], SVG),
-        bar("6.5", "12", "#c9f25d"),
-        bar("10.8", "12", "#f3f0e8", { opacity: ".3" }),
-        bar("15.1", "8", "#c9f25d"),
+        el("circle", { cx: "12", cy: "12", r: "5.5", fill: "#ffffff", opacity: ".16" }, [], SVG),
+        el("circle", { cx: "12", cy: "12", r: "3", fill: "#ffffff" }, [], SVG),
+        bracket("M9.75 5.5H7.4Q5.5 5.5 5.5 7.4v2.35"),
+        bracket("M14.25 5.5h2.35Q18.5 5.5 18.5 7.4v2.35"),
+        bracket("M9.75 18.5H7.4Q5.5 18.5 5.5 16.6v-2.35"),
+        bracket("M14.25 18.5h2.35Q18.5 18.5 18.5 16.6v-2.35"),
       ], SVG);
     }
 

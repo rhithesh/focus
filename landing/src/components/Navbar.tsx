@@ -28,7 +28,7 @@ export function Navbar() {
         transition={{ duration: 0.3 }}
         style={{ backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)" }}
       >
-        <a href="#top" aria-label="Feed Filter, back to top">
+        <a href="#top" aria-label="Focus, back to top">
           <Logo className="text-[16px]" />
         </a>
         <nav className="hidden items-center gap-1 md:flex">

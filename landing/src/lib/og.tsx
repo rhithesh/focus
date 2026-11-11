@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 // The 1200×630 share card used for Open Graph and X/Twitter. Rendered once at build time.
 export const OG_SIZE = { width: 1200, height: 630 };
-export const OG_ALT = "Feed Filter: your feeds, minus the noise. A free Chrome extension for YouTube, X and LinkedIn.";
+export const OG_ALT = "Focus: your feeds, minus the noise. A free Chrome extension for YouTube, X and LinkedIn.";
 
 const PAPER = "#f3f0e8";
 const INK = "#16150f";
@@ -15,14 +15,21 @@ const font = (file: string) => readFile(join(process.cwd(), "assets", file));
 
 function Mark({ size }: { size: number }) {
   const u = size / 24;
-  const bar = (top: number, width: number, color: string, opacity = 1) => (
-    <div style={{ position: "absolute", left: 6 * u, top: top * u, width: width * u, height: 2.4 * u, borderRadius: 1.2 * u, background: color, opacity }} />
-  );
+  const s = "2px solid #fff";
+  const inset = 5 * u;
+  const arm = 4.5 * u;
+  const bracket = {
+    position: "absolute" as const, width: arm, height: arm, boxSizing: "border-box" as const,
+    borderStyle: "solid" as const, borderColor: "#fff", borderWidth: 0,
+  };
   return (
     <div style={{ position: "relative", width: size, height: size, borderRadius: 7 * u, background: INK, display: "flex" }}>
-      {bar(6.5, 12, LIME)}
-      {bar(10.8, 12, PAPER, 0.28)}
-      {bar(15.1, 8, LIME)}
+      <div style={{ ...bracket, left: inset, top: inset, borderTop: s, borderLeft: s, borderTopLeftRadius: 6 * u }} />
+      <div style={{ ...bracket, right: inset, top: inset, borderTop: s, borderRight: s, borderTopRightRadius: 6 * u }} />
+      <div style={{ ...bracket, left: inset, bottom: inset, borderBottom: s, borderLeft: s, borderBottomLeftRadius: 6 * u }} />
+      <div style={{ ...bracket, right: inset, bottom: inset, borderBottom: s, borderRight: s, borderBottomRightRadius: 6 * u }} />
+      <div style={{ position: "absolute", left: 6.5 * u, top: 6.5 * u, width: 11 * u, height: 11 * u, borderRadius: "50%", background: "#fff", opacity: 0.16 }} />
+      <div style={{ position: "absolute", left: 9 * u, top: 9 * u, width: 6 * u, height: 6 * u, borderRadius: "50%", background: "#fff" }} />
     </div>
   );
 }
@@ -69,7 +76,7 @@ export async function renderOgImage() {
         <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", width: 690 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 30 }}>
             <Mark size={46} />
-            Feed Filter
+            Focus
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", fontFamily: "Instrument Serif", fontSize: 118, lineHeight: 0.92, letterSpacing: -3 }}>
