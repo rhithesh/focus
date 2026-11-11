@@ -453,6 +453,14 @@
         font-variant-numeric: tabular-nums;
       }
       .count[hidden] { display: none; }
+      .spin {
+        width: 12px; height: 12px; flex: none; box-sizing: border-box;
+        border: 2px solid rgba(243,240,232,.22); border-top-color: #c9f25d;
+        border-radius: 50%; animation: ygf-spin .7s linear infinite;
+      }
+      .spin[hidden] { display: none; }
+      @keyframes ygf-spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2s; } }
       button {
         all: unset; position: relative; flex: none;
         width: 34px; height: 20px; border-radius: 999px;
@@ -503,12 +511,14 @@
         el("button", { role: "switch", "aria-label": "Focus" }),
         el("span", { class: "label" }),
         el("span", { class: "count", hidden: "" }),
+        el("span", { class: "spin", hidden: "", role: "status", "aria-label": "Checking posts" }),
       ]));
       els = {
         pill: root.querySelector(".pill"),
         label: root.querySelector(".label"),
         count: root.querySelector(".count"),
         button: root.querySelector("button"),
+        spin: root.querySelector(".spin"),
       };
 
       let drag = null;
@@ -602,6 +612,8 @@
       els.label.textContent = on ? "Filter on" : "Filter off";
       els.count.hidden = !on || !blockedCount;
       els.count.textContent = blockedCount + " blurred";
+      // Spins while posts are queued for or waiting on the model.
+      els.spin.hidden = !on || !(pending.size || inFlight.size);
     }
 
     return { render, remove: () => host?.remove() };
@@ -733,6 +745,7 @@
     const batch = [...pending.values()];
     pending.clear();
     batch.forEach((v) => inFlight.add(v.id));
+    pill.render();
 
     const release = () => batch.forEach((v) => inFlight.delete(v.id));
     safeSend({ type: "judge", videos: batch }, (res) => {
@@ -752,6 +765,7 @@
     }, () => {
       release();
       askPausedUntil = Date.now() + ASK_AGAIN_MS;
+      pill.render();
     });
   }
 
