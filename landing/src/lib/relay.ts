@@ -63,7 +63,7 @@ export async function relay(
       headers: {
         Authorization: `Bearer ${apiKey()}`,
         "Content-Type": "application/json",
-        "X-Title": "Feed Filter (free tier)",
+        "X-Title": "Focus (free tier)",
       },
       body: JSON.stringify(v.body),
       signal: AbortSignal.timeout(opts.timeoutMs),

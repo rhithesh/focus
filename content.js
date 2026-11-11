@@ -1,6 +1,7 @@
 // Feed Filter — content script.
 // Finds items in a YouTube, X or LinkedIn feed, ships the text of each one to the
-// service worker for a Jev verdict, and blurs whatever comes back flagged.
+// service worker for a Jev verdict, and blurs whatever comes back flagged. Items stay
+// blurred until that verdict is in, unless that option is off.
 
 (() => {
   /* ------------------------------------------------------------- helpers */
@@ -256,6 +257,13 @@
   let dead = false; // true once the extension is reloaded/updated out from under this tab
   let observer = null;
   let intervalId = null;
+  let guardOn = false; // items are held blurred until judged
+  let guardStyle = null;
+  let resetAt = 0; // when verdicts were last thrown out; deadlines restart from here
+  let askPausedUntil = 0; // the worker or model didn't answer: don't re-ask on every scan
+  let checkingSeen = null; // like toastSeen, for the "checking this feed" toast
+  let hideCheckingToast = null;
+  let hideActiveToast = null; // both toasts sit in the same spot, so one at a time
 
   // After an extension reload, any chrome.runtime.* access here throws "Extension context invalidated".
   function alive() {
@@ -275,15 +283,21 @@
     observer?.disconnect();
     // Nothing can toggle this tab's blur off any more, so don't leave it (or the switch) behind.
     resetAll();
+    setGuard(null);
+    guardStyle?.remove();
     pill.remove();
   }
 
-  function safeSend(msg, cb) {
+  function safeSend(msg, cb, onFail) {
     if (dead || !alive()) { die(); return; }
     try {
       chrome.runtime.sendMessage(msg, (res) => {
         try {
-          if (chrome.runtime.lastError || !res) { if (!alive()) die(); return; }
+          if (chrome.runtime.lastError || !res) {
+            if (!alive()) die();
+            else onFail?.();
+            return;
+          }
           cb(res);
         } catch {
           die();
@@ -307,8 +321,8 @@
   }
 
   // The options slider is a percentage; 100% is a 20px blur.
-  function blurPx() {
-    const pct = Number(settings?.blurStrength ?? 80);
+  function blurPx(s = settings) {
+    const pct = Number(s?.blurStrength ?? 80);
     return Math.max(0, Math.round(pct * 0.2));
   }
 
@@ -322,6 +336,86 @@
       el.appendChild(veil);
     }
     veil.style.setProperty("--ygf-blur", blurPx() + "px");
+  }
+
+  /* ---------------------------------------------------------- pending blur */
+
+  // Scans are too late to stop a flash, so the blur on unjudged items is a stylesheet rule:
+  // an item matches it from its first paint until a scan marks it .ygf-settled. A flagged item
+  // then swaps to its real veil in the same step. Looks the same as .ygf-veil in content.css.
+  // The same rule spins a small ring on every pending item, so waiting on the model is
+  // visible; it dies with the rule the moment the item settles.
+  const SITE_STYLE = {
+    youtube: { surfaces: ["home", "search", "sidebar", "shorts"], radius: 12 },
+    x: { surfaces: ["x"], radius: 0 },
+    linkedin: { surfaces: ["linkedin"], radius: 8 },
+  };
+  const PENDING_DEADLINE_MS = 20_000; // past this an unjudged item shows; a late verdict can still blur it
+  const NOTHING_TO_JUDGE_MS = 3_000; // an item that never yields anything to judge, e.g. a media-only post
+  const ASK_AGAIN_MS = 5_000;
+
+  function setGuard(s) {
+    const { surfaces, radius } = SITE_STYLE[site.name];
+    guardOn = !dead && !!s && s.enabled !== false && s.hideUntilChecked !== false && surfaces.some((k) => s.surfaces?.[k] !== false);
+    document.documentElement.classList.toggle("ygf-guard", guardOn);
+    if (!guardOn) return;
+
+    // Only the outermost item, like scan(): several of these selectors nest.
+    const any = `:is(${site.selector})`;
+    const item = `html.ygf-guard ${any}:not(${any} *):not(.ygf-settled)`;
+    const blur = `blur(${blurPx(s)}px) saturate(0.5)`;
+    const css = `
+      ${item} { position: relative !important; }
+      ${item}::after {
+        content: ""; position: absolute; inset: 0; z-index: 900; border-radius: ${radius}px;
+        background: rgba(236, 243, 255, 0.42);
+        -webkit-backdrop-filter: ${blur}; backdrop-filter: ${blur};
+        transition: opacity 0.18s ease;
+      }
+      ${item}:hover::after { opacity: 0; pointer-events: none; }
+      ${item}::before {
+        content: ""; position: absolute; top: 50%; left: 50%; z-index: 901;
+        width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%;
+        border: 2px solid rgba(22, 21, 15, 0.3); border-top-color: #c9f25d;
+        transition: opacity 0.18s ease;
+        animation: ygf-spin 0.9s linear infinite;
+      }
+      ${item}:hover::before { opacity: 0; pointer-events: none; }
+      @keyframes ygf-spin { to { transform: rotate(1turn); } }
+      @media (prefers-reduced-motion: reduce) {
+        ${item}::before { animation: none; border-color: rgba(22, 21, 15, 0.35); }
+      }
+    `;
+    if (!guardStyle) {
+      guardStyle = document.createElement("style");
+      guardStyle.setAttribute("data-ygf-guard", "");
+      (document.head || document.documentElement).appendChild(guardStyle);
+    }
+    if (guardStyle.textContent !== css) guardStyle.textContent = css;
+  }
+
+  const settle = (el) => el.classList.add("ygf-settled");
+
+  // The element no longer shows the item it was judged as: back to pending.
+  function forgetItem(el) {
+    clearBlock(el);
+    el.classList.remove("ygf-settled");
+    el.__ygfId = null;
+  }
+
+  // Feeds recycle nodes while scrolling. Observer callbacks run before the next paint, so
+  // catching the new content here keeps the last item's "clear" from showing on it.
+  function recheckSettled(records) {
+    if (!guardOn) return;
+    const seen = new Set();
+    for (const { target } of records) {
+      let item = target.closest?.(site.selector);
+      for (let up = item; up; up = up.parentElement?.closest(site.selector)) item = up;
+      if (!item || seen.has(item)) continue;
+      seen.add(item);
+      if (!item.classList.contains("ygf-settled")) continue;
+      if ((site.extract(item)?.id ?? null) !== (item.__ygfId ?? null)) forgetItem(item);
+    }
   }
 
   /* --------------------------------------------------------- on-page switch */
@@ -359,6 +453,14 @@
         font-variant-numeric: tabular-nums;
       }
       .count[hidden] { display: none; }
+      .spin {
+        width: 12px; height: 12px; flex: none; box-sizing: border-box;
+        border: 2px solid rgba(243,240,232,.22); border-top-color: #c9f25d;
+        border-radius: 50%; animation: ygf-spin .7s linear infinite;
+      }
+      .spin[hidden] { display: none; }
+      @keyframes ygf-spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2s; } }
       button {
         all: unset; position: relative; flex: none;
         width: 34px; height: 20px; border-radius: 999px;
@@ -385,13 +487,16 @@
 
     function logo() {
       const SVG = "http://www.w3.org/2000/svg";
-      const bar = (y, w, fill, extra = {}) =>
-        el("rect", { x: "6", y, width: w, height: "2.4", rx: "1.2", fill, ...extra }, [], SVG);
+      const bracket = (d) =>
+        el("path", { d, fill: "none", stroke: "#ffffff", "stroke-width": "1.9", "stroke-linecap": "round" }, [], SVG);
       return el("svg", { class: "logo", viewBox: "0 0 24 24", "aria-hidden": "true" }, [
         el("rect", { width: "24", height: "24", rx: "12", fill: "#2a2920" }, [], SVG),
-        bar("6.5", "12", "#c9f25d"),
-        bar("10.8", "12", "#f3f0e8", { opacity: ".3" }),
-        bar("15.1", "8", "#c9f25d"),
+        el("circle", { cx: "12", cy: "12", r: "5.5", fill: "#ffffff", opacity: ".16" }, [], SVG),
+        el("circle", { cx: "12", cy: "12", r: "3", fill: "#ffffff" }, [], SVG),
+        bracket("M9.75 5.5H7.4Q5.5 5.5 5.5 7.4v2.35"),
+        bracket("M14.25 5.5h2.35Q18.5 5.5 18.5 7.4v2.35"),
+        bracket("M9.75 18.5H7.4Q5.5 18.5 5.5 16.6v-2.35"),
+        bracket("M14.25 18.5h2.35Q18.5 18.5 18.5 16.6v-2.35"),
       ], SVG);
     }
 
@@ -401,17 +506,19 @@
       const root = host.attachShadow({ mode: "open" });
       const style = document.createElement("style");
       style.textContent = CSS;
-      root.append(style, el("div", { class: "pill", title: "Feed Filter · drag to move" }, [
+      root.append(style, el("div", { class: "pill", title: "Focus · drag to move" }, [
         logo(),
-        el("button", { role: "switch", "aria-label": "Feed Filter" }),
+        el("button", { role: "switch", "aria-label": "Focus" }),
         el("span", { class: "label" }),
         el("span", { class: "count", hidden: "" }),
+        el("span", { class: "spin", hidden: "", role: "status", "aria-label": "Checking posts" }),
       ]));
       els = {
         pill: root.querySelector(".pill"),
         label: root.querySelector(".label"),
         count: root.querySelector(".count"),
         button: root.querySelector("button"),
+        spin: root.querySelector(".spin"),
       };
 
       let drag = null;
@@ -505,6 +612,8 @@
       els.label.textContent = on ? "Filter on" : "Filter off";
       els.count.hidden = !on || !blockedCount;
       els.count.textContent = blockedCount + " blurred";
+      // Spins while posts are queued for or waiting on the model.
+      els.spin.hidden = !on || !(pending.size || inFlight.size);
     }
 
     return { render, remove: () => host?.remove() };
@@ -514,6 +623,7 @@
   function setEnabled(on) {
     if (dead || !alive()) { die(); return; }
     settings = { ...settings, enabled: on };
+    setGuard(settings);
     if (!on) {
       resetAll();
       blockedCount = 0;
@@ -546,23 +656,36 @@
 
     let blocked = 0;
     let freshHidden = 0;
+    let waiting = 0;
+    const now = Date.now();
     for (const el of document.querySelectorAll(site.selector)) {
       // Take only the outermost item — several of these selectors nest.
       if (el.parentElement?.closest(site.selector)) continue;
 
       const info = site.extract(el);
-      if (!info) continue;
+      if (!info) {
+        // Still loading, or nothing to judge. Give it a moment, then stop holding it back.
+        if (guardOn && el.__ygfId) forgetItem(el);
+        el.__ygfEmptySince ??= now;
+        if (now - Math.max(el.__ygfEmptySince, resetAt) >= NOTHING_TO_JUDGE_MS) settle(el);
+        continue;
+      }
+      el.__ygfEmptySince = null;
 
       // Feeds recycle nodes while scrolling; reset when the item changes.
       if (el.__ygfId !== info.id) {
-        clearBlock(el);
+        forgetItem(el);
         el.__ygfId = info.id;
+        el.__ygfSince = now;
       }
 
       if (!surfaceEnabled(info.surface)) {
         clearBlock(el);
+        settle(el);
         continue;
       }
+
+      const overdue = now - Math.max(el.__ygfSince, resetAt) >= PENDING_DEADLINE_MS;
 
       let verdict = verdicts.get(info.id);
       // A keyword-rule stand-in (the model was rate-limited or unreachable): ask again once it may be back.
@@ -576,14 +699,19 @@
           blocked++;
           // File each hidden item into the week's tally once per tab session.
           if (!counted.has(info.id)) { counted.add(info.id); freshHidden++; }
+          settle(el);
         } else {
           clearBlock(el);
+          // A clean title doesn't clear it while its picture is still being judged.
+          if (!verdict.awaitingLook || overdue) settle(el);
+          else waiting++;
         }
         continue;
       }
 
-      if (!inFlight.has(info.id) && !pending.has(info.id)) pending.set(info.id, info);
-      if (settings.hideUntilChecked) applyBlock(el);
+      if (!inFlight.has(info.id) && !pending.has(info.id) && now >= askPausedUntil) pending.set(info.id, info);
+      if (overdue) settle(el);
+      else waiting++;
     }
 
     blockedCount = blocked;
@@ -593,13 +721,16 @@
       safeSend({ type: "page", badge: blocked, hidden: freshHidden }, () => {});
     }
     maybeToast(blocked);
+    maybeCheckingToast(waiting);
     if (pending.size) scheduleFlush();
   }
 
   function scheduleScan(delay = 250) {
-    if (dead) return;
-    clearTimeout(scanTimer);
-    scanTimer = setTimeout(scan, delay);
+    if (dead || scanTimer) return; // not a debounce: a busy page must not keep pushing the scan back
+    scanTimer = setTimeout(() => {
+      scanTimer = null;
+      scan();
+    }, delay);
   }
 
   function scheduleFlush() {
@@ -614,12 +745,27 @@
     const batch = [...pending.values()];
     pending.clear();
     batch.forEach((v) => inFlight.add(v.id));
+    pill.render();
 
+    const release = () => batch.forEach((v) => inFlight.delete(v.id));
     safeSend({ type: "judge", videos: batch }, (res) => {
-      batch.forEach((v) => inFlight.delete(v.id));
-      if (res.settings) settings = res.settings;
-      for (const [id, v] of Object.entries(res.verdicts || {})) verdicts.set(id, v);
+      release();
+      if (res.settings) {
+        settings = res.settings;
+        setGuard(settings);
+      }
+      for (const [id, v] of Object.entries(res.verdicts || {})) {
+        // The picture's verdict can get here first; don't go back to waiting for it.
+        const known = verdicts.get(id);
+        if (v.awaitingLook && known && !known.awaitingLook) continue;
+        verdicts.set(id, v);
+      }
+      if (batch.some((v) => !verdicts.has(v.id))) askPausedUntil = Date.now() + ASK_AGAIN_MS;
       scan();
+    }, () => {
+      release();
+      askPausedUntil = Date.now() + ASK_AGAIN_MS;
+      pill.render();
     });
   }
 
@@ -634,11 +780,44 @@
     // With no goal the keyword rules alone hide less; wait for a count that means something.
     if (blocked < (goalless ? 3 : 1)) return;
     toastShown = true;
-    showToast(blocked, goalless);
+    showToast((span, hide) => fillHiddenToast(span, hide, blocked, goalless));
     try { chrome.storage.local.set({ toastDone: Date.now() }); } catch { if (!alive()) die(); }
   }
 
-  function showToast(n, goalless) {
+  // A feed that opens fully blurred needs saying why, once per install.
+  function maybeCheckingToast(waiting) {
+    if (!waiting) {
+      hideCheckingToast?.();
+      return;
+    }
+    if (checkingSeen !== false || !guardOn || dead || !document.body) return;
+    checkingSeen = true;
+    hideCheckingToast = showToast((span) => span.append("Checking this feed. Posts clear as soon as they\u2019re judged."));
+    try { chrome.storage.local.set({ checkingToastDone: Date.now() }); } catch { if (!alive()) die(); }
+  }
+
+  function fillHiddenToast(span, hide, n, goalless) {
+    if (goalless) {
+      const b = document.createElement("b");
+      b.textContent = String(n);
+      span.append("Feed Filter is hiding ", b, " things here. ");
+      const link = document.createElement("a");
+      link.textContent = "Pick a goal";
+      link.className = "link";
+      link.addEventListener("click", () => { safeSend({ type: "openWelcome" }, () => {}); hide(); });
+      span.append(link, " to tune what stays hidden.");
+    } else {
+      const b = document.createElement("b");
+      b.textContent = String(n);
+      span.append("Feed Filter hid ", b, " things on this feed");
+      const em = document.createElement("em");
+      em.textContent = "\u2014 hover one to see through.";
+      span.append(" ", em);
+    }
+  }
+
+  function showToast(fill) {
+    hideActiveToast?.();
     const host = document.createElement("div");
     host.setAttribute("data-ygf-toast", "");
     const root = host.attachShadow({ mode: "open" });
@@ -684,24 +863,8 @@
     }
 
     const span = document.createElement("span");
-    span.innerHTML = ""; // built below with DOM calls; no page HTML ever parsed
-    if (goalless) {
-      const b = document.createElement("b");
-      b.textContent = String(n);
-      span.append("Feed Filter is hiding ", b, " things here. ");
-      const link = document.createElement("a");
-      link.textContent = "Pick a goal";
-      link.className = "link";
-      link.addEventListener("click", () => { safeSend({ type: "openWelcome" }, () => {}); hide(); });
-      span.append(link, " to tune what stays hidden.");
-    } else {
-      const b = document.createElement("b");
-      b.textContent = String(n);
-      span.append("Feed Filter hid ", b, " things on this feed");
-      const em = document.createElement("em");
-      em.textContent = "— hover one to see through.";
-      span.append(" ", em);
-    }
+    span.innerHTML = ""; // built with DOM calls; no page HTML ever parsed
+    fill(span, hide);
 
     const close = document.createElement("button");
     close.className = "close";
@@ -729,6 +892,8 @@
     document.body.appendChild(host);
     requestAnimationFrame(() => outer.classList.add("in"));
     setTimeout(hide, 14_000);
+    hideActiveToast = hide;
+    return hide;
   }
 
   /* ----------------------------------------------------------------- boot */
@@ -737,15 +902,17 @@
     verdicts.clear();
     pending.clear();
     inFlight.clear();
-    for (const el of document.querySelectorAll(".ygf-host")) {
-      clearBlock(el);
-      el.__ygfId = null;
-    }
+    askPausedUntil = 0;
+    resetAt = Date.now();
+    for (const el of document.querySelectorAll(".ygf-host, .ygf-settled")) forgetItem(el);
   }
 
   function start() {
-    observer = new MutationObserver(() => scheduleScan());
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    observer = new MutationObserver((records) => {
+      recheckSettled(records);
+      scheduleScan();
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["href"] });
 
     // Safety net for virtualised lists that mutate outside the observed subtree.
     intervalId = setInterval(scan, 1500);
@@ -755,20 +922,34 @@
     scan();
   }
 
+  // Storage answers without waking the service worker, so the pending blur is on before the
+  // feed renders. What's stored can predate a default, hence setGuard treating unset as on.
+  try {
+    chrome.storage.local.get("settings", (r) => {
+      try {
+        if (!settings && !dead) setGuard(r?.settings || {});
+      } catch { if (!alive()) die(); }
+    });
+  } catch {
+    die();
+  }
+
   safeSend({ type: "settings" }, (s) => {
     settings = s || { enabled: false };
+    setGuard(settings);
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", start, { once: true });
     } else {
       start();
     }
-  });
+  }, () => setGuard(null)); // no worker means no scans, so nothing could ever clear the blur
 
-  // Whether the one-per-install toast has already been spent.
+  // Whether the one-per-install toasts have already been spent.
   try {
-    chrome.storage.local.get("toastDone", (r) => {
+    chrome.storage.local.get(["toastDone", "checkingToastDone"], (r) => {
       try {
         toastSeen = !!r?.toastDone;
+        checkingSeen = !!r?.checkingToastDone;
         scan(); // the flag may have arrived after a scan that passed the threshold
       } catch { if (!alive()) die(); }
     });
@@ -781,6 +962,7 @@
       if (dead || area !== "local" || !changes.settings) return;
       safeSend({ type: "settings" }, (s) => {
         settings = s;
+        setGuard(settings);
         resetAll();
         scan();
       });

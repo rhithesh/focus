@@ -30,9 +30,11 @@ const HOSTS = {
 };
 
 // What each fixture item should end up as. Items not listed must not be judged at all.
+// Note: picture checks are on by default, so the YouTube "clean" video's bait
+// thumbnail blurs it through the image pass.
 const EXPECT = {
-  "www.youtube.com": { bait: true, clean: false },
-  "x.com": { bait: true, spam: true, clean: false, media: false, baitN: true, cleanN: false, quoteN: false, quoteInner: false },
+  "www.youtube.com": { bait: true, clean: true },
+  "x.com": { bait: true, spam: true, clean: false, media: true, baitN: true, cleanN: false, quoteN: false, quoteInner: false },
   "www.linkedin.com": { bait: true, spam: true, clean: false },
 };
 
@@ -43,6 +45,9 @@ const freeCalls = [];
 const IMAGE_HOSTS = ["i.ytimg.com", "pbs.twimg.com"];
 const imageGets = [];
 const lookCalls = [];
+// Failure switches for the "blur until judged" checks.
+let freeHangs = false;
+let lookDelayMs = 0;
 
 // Width and height from a baseline or progressive JPEG's SOF marker.
 function jpegSize(buf) {
@@ -57,14 +62,15 @@ function jpegSize(buf) {
 
 // Stand-in for landing/src/app/api/jev/look: the clean video's thumbnail is bait, and the
 // picture-only X post is a scam graphic.
-function freeLook(req, res, raw) {
+async function freeLook(req, res, raw) {
+  if (lookDelayMs) await sleep(lookDelayMs);
   const body = JSON.parse(raw);
   const answers = {};
   const sizes = [];
   for (const [k, item] of Object.entries(body.state.items)) {
     const url = item.image?.image_url?.url || "";
     sizes.push(url.startsWith("data:image/jpeg;base64,") ? jpegSize(Buffer.from(url.split(",")[1], "base64")) : null);
-    answers[k + "_look"] = { score: /URL Shortener/.test(item.title || "") ? 2.9 : 0.3, confidence: 0.92 };
+    answers[k + "_look"] = { score: /URL Shortener/.test(item.title || item.text || "") ? 2.9 : 0.3, confidence: 0.92 };
     answers[k + "_scam"] = { noul: item.text === "" ? 0.97 : 0.02 };
     if (k + "_goal" in body.questions) answers[k + "_goal"] = { score: 0.5, confidence: 0.9 };
   }
@@ -75,6 +81,7 @@ function freeLook(req, res, raw) {
 // Stand-in for landing/src/app/api/jev: the first call doesn't fit in what's left (1 post),
 // the rest get answers.
 function freeTier(req, res, raw) {
+  if (freeHangs) return; // accept the request and never answer
   const body = JSON.parse(raw);
   freeCalls.push({ install: req.headers["x-feed-filter-install"], auth: req.headers.authorization, items: Object.keys(body.state.items).length });
   if (freeCalls.length === 1) {
@@ -124,6 +131,8 @@ const server = createServer({ key: readFileSync(join(tmp, "key.pem")), cert: rea
 
 const chrome = spawn(CHROME, [
   "--headless=new", "--remote-debugging-pipe", "--enable-unsafe-extension-debugging",
+  // The test keeps several tabs open and hidden tabs must keep scanning on time.
+  "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
   "--user-data-dir=" + join(tmp, "profile"), "--no-first-run", "--window-size=1200,900",
   "--host-resolver-rules=" + [...Object.keys(HOSTS), FREE_HOST, ...IMAGE_HOSTS].map((h) => `MAP ${h}:443 127.0.0.1:${PORT}`).join(","),
   "--ignore-certificate-errors", "about:blank",
@@ -275,7 +284,7 @@ try {
 
   if (!KEY) {
     console.log("\n-- image pass (thumbnails and post pictures) --");
-    check(lookCalls.length === 0 && imageGets.length === 0, "with picture checks off, no picture is loaded or sent");
+    check(lookCalls.length > 0 && imageGets.length > 0, "picture checks are on by default, so pictures were loaded and judged");
     await evaluate(`chrome.storage.local.get("settings").then(({ settings }) => chrome.storage.local.set({ settings: { ...settings, enabled: true, lookAtImages: true } }))`, swSession);
     const yt = pages["www.youtube.com"];
     check(await waitFor(`!!document.querySelector("#clean > .ygf-veil")`, yt, 15000), "YouTube: a clean title with a bait thumbnail gets blurred once its picture is judged");
@@ -297,6 +306,76 @@ try {
     check(lookCalls.length === calls, "...without asking Jev again");
   }
 
+  if (!KEY) {
+    console.log("\n-- blur until judged --");
+    await send("Target.activateTarget", { targetId: (await send("Target.getTargets")).targetInfos.find((t) => t.url.startsWith("https://x.com")).targetId });
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 1, y: 1 }, xs);
+    check((await evaluate(`chrome.storage.local.get("settings").then((r) => r.settings.hideUntilChecked)`, swSession)) === true, "blur until judged is on by default");
+
+    // Adds a post and reports its blur in the same task, before anything could paint. Also records
+    // whether the post is ever settled with no veil while it should only ever end up flagged.
+    let nextPost = 1790000000000000100n;
+    const addPost = (id, inner, testid) => evaluate(`(() => {
+      const el = document.createElement("article");
+      el.id = ${JSON.stringify(id)};
+      ${testid ? `el.setAttribute("data-testid", "tweet");` : ""}
+      el.innerHTML = ${JSON.stringify(inner)};
+      window.__shownBare ||= {};
+      new MutationObserver(() => {
+        if (el.classList.contains("ygf-settled") && !el.querySelector(":scope > .ygf-veil")) window.__shownBare[el.id] = true;
+      }).observe(el, { attributes: true, attributeFilter: ["class"], childList: true });
+      document.querySelector("main").append(el);
+      return getComputedStyle(el, "::after").backdropFilter;
+    })()`, xs);
+    const textPost = (text, extra = "") => `<a href="/author"><span>Some Author</span></a><a href="/author/status/${++nextPost}"><span>1h</span></a><div><span>${text}</span></div>${extra}`;
+    const settled = (id) => `document.querySelector("#${id}").classList.contains("ygf-settled")`;
+    const pendingBlur = (id) => evaluate(`getComputedStyle(document.querySelector("#${id}"), "::after").backdropFilter`, xs);
+    const hasVeil = (id) => evaluate(`!!document.querySelector("#${id} > .ygf-veil")`, xs);
+
+    const first = await addPost("p1", textPost("Notes on how we tune the Postgres vacuum."));
+    check(first.includes("blur(16px)"), "a new post is blurred before anything could paint it (" + first + ")");
+    check(await waitFor(settled("p1"), xs, 8000), "a clean post clears once it's judged");
+    check((await pendingBlur("p1")) === "none" && !(await hasVeil("p1")), "...and nothing is left on it");
+
+    const recycled = await evaluate(`(async () => {
+      const el = document.querySelector("#p1");
+      el.querySelector('a[href*="/status/"]').setAttribute("href", "/author/status/${++nextPost}");
+      await Promise.resolve(); // past the observer's microtask, still before any paint
+      return { settled: el.classList.contains("ygf-settled"), blur: getComputedStyle(el, "::after").backdropFilter };
+    })()`, xs);
+    check(!recycled.settled && recycled.blur.includes("blur"), "a recycled node showing a new post is blurred again before it paints");
+
+    lookDelayMs = 4000;
+    const picture = (name) => `<img alt="" src="https://pbs.twimg.com/media/${name}?format=webp" style="height:40px">`;
+    await addPost("p2", textPost("Notes on the cache rollout.", picture("PendingClean")));
+    await addPost("p3", textPost("Design a URL Shortener, my write-up.", picture("PendingBait")));
+    await addPost("p4", `<div data-testid="User-Name"><a href="/author"><span>Some Author</span></a><a href="/author/status/${++nextPost}"><time>1h</time></a></div><div data-testid="tweetPhoto">${picture("PendingScam")}</div>`, true);
+    const textDone = await waitFor(`(async () => {
+      const all = await chrome.storage.local.get(null);
+      return Object.values(all).filter((e) => /jev-free-mock$/.test(e?.d?.source || "")).length >= 12;
+    })()`, swSession, 3000);
+    await sleep(800);
+    check(textDone && !(await evaluate(settled("p2"), xs)), "a clean title stays blurred while its picture is being judged");
+    check(!(await evaluate(settled("p4"), xs)) && (await pendingBlur("p4")).includes("blur"), "a picture-only post stays blurred while its picture is being judged");
+    check(await waitFor(settled("p2"), xs, 10000) && !(await hasVeil("p2")), "...and the clean picture then clears it");
+    check(await waitFor(`${settled("p3")} && ${settled("p4")}`, xs, 10000) && (await hasVeil("p3")) && (await hasVeil("p4")), "bait and scam pictures end up flagged");
+    const bare = await evaluate(`window.__shownBare`, xs);
+    check(!bare.p3 && !bare.p4, "...without ever showing unblurred on the way (" + JSON.stringify(bare) + ")");
+    lookDelayMs = 0;
+
+    await addPost("p5", `<div><span>Promoted, with no permalink</span></div>`);
+    check((await pendingBlur("p5")).includes("blur") && !(await evaluate(settled("p5"), xs)), "a post with nothing to judge starts out blurred");
+    check(await waitFor(settled("p5"), xs, 6000), "...and is let through after a few seconds");
+
+    freeHangs = true;
+    const hungAt = Date.now();
+    await addPost("p6", textPost("Plain notes while the model hangs."));
+    await sleep(4000);
+    check(!(await evaluate(settled("p6"), xs)), "a hung model request keeps the post blurred for now");
+    check(await waitFor(settled("p6"), xs, 16000), `...then times out and keyword rules clear it (${Math.round((Date.now() - hungAt) / 1000)}s)`);
+    freeHangs = false;
+  }
+
   console.log("\n-- extension reloaded under open tabs --");
   send("Runtime.evaluate", { expression: "chrome.runtime.reload()" }, swSession).catch(() => {});
   await sleep(3000);
@@ -304,6 +383,7 @@ try {
     const left = await evaluate(`document.querySelectorAll(".ygf-veil").length`, s);
     check(left === 0, `${host}: orphaned tab clears its blur (${left} left)`);
     check(!(await evaluate(`!!document.querySelector("[data-ygf-pill]")`, s)), `${host}: orphaned tab removes its switch`);
+    check(!(await evaluate(`document.documentElement.classList.contains("ygf-guard")`, s)), `${host}: orphaned tab drops the pending blur`);
   }
   const pageSessions = new Set(Object.values(pages));
   const errors = events.filter((e) => e.method === "Runtime.exceptionThrown" && pageSessions.has(e.sessionId));

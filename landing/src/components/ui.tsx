@@ -16,11 +16,16 @@ export function Logo({ className = "" }: { className?: string }) {
     <span className={`inline-flex items-center gap-2 font-medium tracking-tight ${className}`}>
       <svg viewBox="0 0 24 24" className="size-6" aria-hidden>
         <rect width="24" height="24" rx="7" className="fill-ink" />
-        <rect x="6" y="6.5" width="12" height="2.4" rx="1.2" className="fill-lime" />
-        <rect x="6" y="10.8" width="12" height="2.4" rx="1.2" className="fill-paper" opacity=".28" />
-        <rect x="6" y="15.1" width="8" height="2.4" rx="1.2" className="fill-lime" />
+        <circle cx="12" cy="12" r="5.5" fill="#fff" opacity=".16" />
+        <circle cx="12" cy="12" r="3" fill="#fff" />
+        <g fill="none" stroke="#fff" strokeWidth="1.9" strokeLinecap="round">
+          <path d="M9.75 5.5H7.4Q5.5 5.5 5.5 7.4v2.35" />
+          <path d="M14.25 5.5h2.35Q18.5 5.5 18.5 7.4v2.35" />
+          <path d="M9.75 18.5H7.4Q5.5 18.5 5.5 16.6v-2.35" />
+          <path d="M14.25 18.5h2.35Q18.5 18.5 18.5 16.6v-2.35" />
+        </g>
       </svg>
-      Feed Filter
+      Focus
     </span>
   );
 }

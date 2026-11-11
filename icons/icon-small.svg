@@ -1,6 +1,17 @@
 <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(8 8) scale(4)">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
   <rect width="16" height="16" rx="4.5" fill="#16150F"/>
-  <rect x="4" y="4" width="8" height="2" rx="1" fill="#C9F25D"/>
-  <rect x="4" y="7" width="8" height="2" rx="1" fill="#F3F0E8" opacity=".38"/>
-  <rect x="4" y="10" width="5" height="2" rx="1" fill="#C9F25D"/>
+  <circle cx="8" cy="8" r="4" fill="url(#glow)"/>
+  <circle cx="8" cy="8" r="1.75" fill="#FFFFFF"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round">
+    <path d="M7 3.5H5Q3.5 3.5 3.5 5v2"/>
+    <path d="M9 3.5h2Q12.5 3.5 12.5 5v2"/>
+    <path d="M7 12.5H5Q3.5 12.5 3.5 11V9"/>
+    <path d="M9 12.5h2q1.5 0 1.5-1.5V9"/>
+  </g>
 </svg>

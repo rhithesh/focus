@@ -10,11 +10,11 @@ export const FAQS = [
   },
   {
     q: "What does it cost?",
-    a: "Nothing. Without a key, Feed Filter judges your posts for free, with no daily limit. You can also bring your own OpenRouter key, so your posts go straight to the model instead of through Feed Filter’s server: about $0.0003 for a page of ten posts. If the free tier is ever too busy, keyword rules keep catching the obvious bait until it’s back.",
+    a: "Nothing. Without a key, Focus judges your posts for free, with no daily limit. You can also bring your own OpenRouter key, so your posts go straight to the model instead of through Focus’s server: about $0.0003 for a page of ten posts. If the free tier is ever too busy, keyword rules keep catching the obvious bait until it’s back.",
   },
   {
     q: "Where do my posts and goals go?",
-    a: "On the free tier, the text of each post (plus a shrunk copy of its picture, if you turn picture checks on) and your goals pass through Feed Filter’s server on their way to the model; nothing is stored or logged, only an anonymous daily counter. With your own key, they go straight from your browser to OpenRouter or TypeSafe and Feed Filter never sees them. Settings and keys live in your browser (chrome.storage.local).",
+    a: "On the free tier, the text of each post (plus a shrunk copy of its picture, if you turn picture checks on) and your goals pass through Focus’s server on their way to the model; nothing is stored or logged, only an anonymous daily counter. With your own key, they go straight from your browser to OpenRouter or TypeSafe and Focus never sees them. Settings and keys live in your browser (chrome.storage.local).",
   },
   {
     q: "What won’t it catch?",

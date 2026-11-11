@@ -9,8 +9,8 @@ export const SITE_URL = (
 ).replace(/\/$/, "");
 
 export const SITE = {
-  name: "Feed Filter",
-  title: "Feed Filter: block clickbait and spam on YouTube, X and LinkedIn",
+  name: "Focus",
+  title: "Focus: block clickbait and spam on YouTube, X and LinkedIn",
   shortTitle: "Your feeds, minus the noise",
   description:
     "Free Chrome extension that blurs clickbait, spam and off-topic posts on YouTube, X (Twitter) and LinkedIn, judged against goals you write. Hover any post to see it anyway.",

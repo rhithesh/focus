@@ -72,7 +72,9 @@ try {
   await send("Page.enable");
   await send("Runtime.enable");
 
-  // let content.js scan and the in-page structural checks finish
+  // let content.js scan and the in-page structural checks finish. On a cold start the
+  // target shows up before the page's scripts have run, so wait for them to exist first.
+  for (let i = 0; i < 100 && !(await evaluate("!!window.__ready")); i++) await sleep(100);
   await evaluate("window.__ready");
 
   const rect = await evaluate(`(() => {
@@ -190,6 +192,68 @@ try {
     [pShown && Math.abs(pShown.px - pMoved.px) <= 1, "turning it back on restores it where it was dragged"],
   ];
 
+  // Blur until judged, against a service worker that fails and one that never answers.
+  const addTile = (id) => evaluate(`(() => {
+    const el = document.createElement("ytd-rich-item-renderer");
+    el.id = "t${id}";
+    el.innerHTML = '<a id="thumbnail" href="/watch?v=${id}"><span class="thumb"></span></a><h3><a id="video-title-link" href="/watch?v=${id}"><span id="video-title">Another video</span></a></h3>';
+    document.querySelector("#tiles").appendChild(el);
+    return getComputedStyle(el, "::after").backdropFilter;
+  })()`);
+  const isSettled = (id) => evaluate(`document.querySelector("#t${id}").classList.contains("ygf-settled")`);
+  const calls = () => evaluate("window.__judgeCalls");
+
+  // The worker fails first, so tiles are still waiting when the toast is looked at.
+  await evaluate(`window.__judgeCallsBefore = window.__judgeCalls; window.__judgeMode = "fail"`);
+  await evaluate(`window.__setSetting("hideUntilChecked", true)`);
+  await sleep(1000);
+  const toasts = await evaluate(`[...document.querySelectorAll("[data-ygf-toast]")].filter((h) => h.shadowRoot.querySelector(".toast.in")).map((h) => h.shadowRoot.textContent.includes("Checking"))`);
+  const failBlur = await addTile("eeeeeeeeeee");
+  const failStart = await evaluate("window.__judgeCallsBefore");
+  await sleep(1400);
+  const failFirst = await calls();
+  const failHeld = !(await isSettled("eeeeeeeeeee"));
+  await sleep(1400);
+  const failSame = await calls();
+  await sleep(3000);
+  const failRetried = await calls();
+  await evaluate(`window.__judgeMode = "normal"`);
+  await sleep(6000);
+  const failRecovered = await isSettled("eeeeeeeeeee");
+
+  await evaluate(`window.__judgeMode = "hang"`);
+  await addTile("fffffffffff");
+  await sleep(4000);
+  const hangHeld = !(await isSettled("fffffffffff"));
+  await sleep(19500); // 20s deadline, noticed by a scan up to 1.5s later
+  const hangReleased = await isSettled("fffffffffff");
+  await evaluate(`window.__judgeMode = "normal"`);
+
+  await evaluate("window.__setEnabled(false)");
+  await sleep(300);
+  await addTile("ggggggggggg");
+  const offBlur = await evaluate(`getComputedStyle(document.querySelector("#tggggggggggg"), "::after").backdropFilter`);
+  await evaluate("window.__setEnabled(true)");
+  await sleep(700);
+  await evaluate(`window.__setSetting("hideUntilChecked", false)`);
+  await sleep(300);
+  await addTile("hhhhhhhhhhh");
+  const optionOffBlur = await evaluate(`getComputedStyle(document.querySelector("#thhhhhhhhhhh"), "::after").backdropFilter`);
+
+  const guardChecks = [
+    [failBlur.includes("blur(16px)"), "a new tile is blurred before anything could paint it — got " + failBlur],
+    [toasts.length === 1 && toasts[0], "only the checking toast is showing — got " + JSON.stringify(toasts)],
+    [failFirst > failStart && failHeld, "a failed request leaves the tile blurred for now"],
+    [failSame === failFirst, `...and doesn't re-ask on every scan (${failFirst} → ${failSame})`],
+    [failRetried > failSame, `...then asks again (${failSame} → ${failRetried})`],
+    [failRecovered, "once the worker is back, the tile clears"],
+    [hangHeld, "a request that never returns holds the tile blurred for now"],
+    [hangReleased, "...and the deadline lets it through"],
+    [offBlur === "none", "with the filter off, new tiles aren't blurred — got " + offBlur],
+    [optionOffBlur === "none", "with the option off, new tiles aren't blurred — got " + optionOffBlur],
+  ];
+  for (const [c] of guardChecks) if (!c) process.exitCode = 1;
+
   // Simulate the extension being reloaded/updated out from under this already-open
   // tab, then feed it a brand-new tile so it tries (and fails) to reach the
   // now-severed background. The old bug: this threw "Extension context
@@ -219,6 +283,8 @@ try {
     ...toggleChecks.map(([c, m]) => (c ? "  PASS  " : "  FAIL  ") + m),
     "", "-- on-page switch --",
     ...pillChecks.map(([c, m]) => (c ? "  PASS  " : "  FAIL  ") + m),
+    "", "-- blur until judged --",
+    ...guardChecks.map(([c, m]) => (c ? "  PASS  " : "  FAIL  ") + m),
     "", "-- extension invalidated mid-session --",
     ...invalidationChecks.map(([c, m]) => (c ? "  PASS  " : "  FAIL  ") + m)];
   for (const [c, m] of checks) if (!c) process.exitCode = 1;

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Feed Filter — goal-aligned feeds",
+  "name": "Focus",
   "version": "1.3.0",
   "description": "Blurs clickbait, spam and off-goal posts on YouTube, X and LinkedIn, judged by AI against goals you write.",
   "permissions": ["storage"],
@@ -32,7 +32,7 @@
   "options_page": "options.html",
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Feed Filter",
+    "default_title": "Focus",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

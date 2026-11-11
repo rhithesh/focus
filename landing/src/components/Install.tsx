@@ -5,7 +5,7 @@ import { SITE } from "@/lib/site";
 import { btn, Kicker, Mark, Reveal } from "./ui";
 
 const STEPS = [
-  <>Open Feed Filter on the Chrome Web Store and click Add to Chrome.</>,
+  <>Open Focus on the Chrome Web Store and click Add to Chrome.</>,
   <>Settings open by themselves. Write your goals and hit Save. An API key is optional.</>,
   <>Reload any open YouTube, X or LinkedIn tab.</>,
 ];

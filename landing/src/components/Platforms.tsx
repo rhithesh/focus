@@ -33,7 +33,7 @@ const NUMBERS = [
   { big: "$0.0003", small: "to judge a page of ten posts" },
   { big: "~1s", small: "for the whole page, in one request" },
   { big: "7 days", small: "verdicts are cached, so scrolling back is free" },
-  { big: "0", small: "posts or goals stored by Feed Filter, free tier included" },
+  { big: "0", small: "posts or goals stored by Focus, free tier included" },
 ];
 
 export function Platforms() {

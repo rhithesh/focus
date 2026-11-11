@@ -28,18 +28,20 @@ const DEFAULT_SETTINGS = {
   offGoalThreshold: 2.6,
   junkThreshold: 0.85, // clickbait reads 0.45-0.75 on this question; real scams read 0.9+
   minConfidence: 0.5,
-  hideUntilChecked: false,
+  hideUntilChecked: true, // nothing shows until its verdict is in; content.js caps the wait
   blurStrength: 80, // percent; 100% renders as a 20px blur
   fallbackHeuristics: true,
   freeTier: true, // use the free tier when no key is set
   showPagePill: true, // the on/off switch floating on YouTube, X and LinkedIn
-  lookAtImages: false, // also judge thumbnails and post images (Jev's image input is still experimental)
+  lookAtImages: true, // also judge thumbnails and post images (Jev's image input is new)
 };
 
 // Jev evaluates every question against the state in one parallel pass, so a whole
 // feed page fits in one request. 20 items = 60 questions, ~5k input tokens.
 const BATCH_SIZE = 20;
 const MAX_PARALLEL = 3;
+// A hung request must not hold the feed blurred: time out and let the keyword rules stand in.
+const MODEL_TIMEOUT_MS = 15_000;
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const CACHE_LIMIT = 6000;
 
@@ -410,6 +412,7 @@ async function callFree(body, endpoint = FREE_ENDPOINT) {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Feed-Filter-Install": await installId() },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
     });
   } catch (e) {
     throw new FreeTierError("Free tier unreachable: " + (e.message || e), 60);
@@ -461,6 +464,7 @@ async function callJev(body, s, attempt = 0, url = ENDPOINTS[s.provider] || ENDP
         ...extraHeaders,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
     });
   } catch (e) {
     throw new Error("Network error reaching " + url + ": " + (e.message || e));
@@ -566,13 +570,21 @@ async function handleJudge(videos, tabId) {
   if (!s.enabled) return { verdicts: {}, settings: s };
 
   // Picture-only posts are sent only while the image pass is on, and skip the text pass.
-  const res = await judgeText(videos.filter((v) => v.title), s);
+  const res = await judgeText(videos.filter((v) => v.title), s, tabId);
   const pictures = s.lookAtImages ? videos.filter((v) => v.image) : [];
   if (!pictures.length) return res;
   return { ...res, verdicts: await withLooks(pictures, s, res.verdicts, tabId) };
 }
 
-async function judgeText(videos, s) {
+function pushVerdicts(tabId, verdicts) {
+  if (tabId == null || !Object.keys(verdicts).length) return;
+  return chrome.tabs.sendMessage(tabId, { type: "verdicts", verdicts }).catch(() => {});
+}
+
+// The tab keeps an item blurred while this is true of it: its picture is still to be judged.
+const looksPending = (v, s) => s.lookAtImages && !!v.image && Date.now() >= lookPausedUntil;
+
+async function judgeText(videos, s, tabId) {
   if (!videos.length) return { verdicts: {}, settings: s };
   const stamp = rubricStamp(s);
   const ids = videos.map((v) => v.id);
@@ -586,10 +598,11 @@ async function judgeText(videos, s) {
   const modelAvailable = !!s.apiKey || s.freeTier;
   const heuristicsFor = (items, extra = {}, retryAt = Date.now() + 60_000) => {
     const out = { ...cached, ...extra };
-    if (!s.fallbackHeuristics) return out;
+    // With keyword rules off an item still gets an answer, so the tab stops waiting on it.
+    const standIn = (v) => (s.fallbackHeuristics ? heuristicVerdict(v, s) : { tag: null, why: "", scores: {}, source: "none" });
     for (const v of items) {
       if (v.id in out) continue;
-      out[v.id] = modelAvailable ? { ...heuristicVerdict(v, s), provisional: true, retryAt } : heuristicVerdict(v, s);
+      out[v.id] = modelAvailable ? { ...standIn(v), provisional: true, retryAt } : standIn(v);
     }
     return out;
   };
@@ -629,9 +642,13 @@ async function judgeText(videos, s) {
       slice.map(async (chunk) => {
         const data = await callJev(buildRequest(chunk, s), s);
         const answers = data.answers || {};
+        const done = {};
         chunk.forEach((v, idx) => {
           fresh[v.id] = verdictFrom(answers, "v" + idx, s, data.model || s.model);
+          done[v.id] = looksPending(v, s) ? { ...fresh[v.id], awaitingLook: true } : fresh[v.id];
         });
+        // Clear each batch as it lands rather than holding them all for the slowest.
+        if (chunks.length > 1) pushVerdicts(tabId, done);
       })
     );
     for (const r of results) {
@@ -664,10 +681,14 @@ async function withLooks(items, s, verdicts, tabId) {
   const out = { ...verdicts };
   const retryAt = Math.max(lookPausedUntil, Date.now() + 60_000);
   for (const v of items) {
-    if (v.id in cached) out[v.id] = combine(verdicts[v.id], cached[v.id]);
+    if (v.id in cached) {
+      out[v.id] = combine(verdicts[v.id], cached[v.id]);
+      continue;
+    }
     // A picture-only post has nothing to show until its picture is judged; ask again later
     // in case the result never arrives (the tab reloaded, the worker restarted).
-    else if (!out[v.id]) out[v.id] = { tag: null, why: "", scores: {}, source: "image", provisional: true, retryAt };
+    const base = out[v.id] || { tag: null, why: "", scores: {}, source: "image", provisional: true, retryAt };
+    out[v.id] = looksPending(v, s) ? { ...base, awaitingLook: true } : base;
   }
 
   const todo = items.filter((v) => !(v.id in cached) && !lookInFlight.has(v.id));
@@ -677,13 +698,14 @@ async function withLooks(items, s, verdicts, tabId) {
 
 async function judgePictures(items, s, stamp, textVerdicts, tabId) {
   items.forEach((v) => lookInFlight.add(v.id));
+  const fresh = {};
+  let loaded = items;
   try {
-    const loaded = await Promise.all(items.map(async (v) => ({ ...v, imageData: await loadImage(v.image) })));
+    loaded = await Promise.all(items.map(async (v) => ({ ...v, imageData: await loadImage(v.image) })));
     const ready = loaded.filter((v) => v.imageData);
     const chunks = [];
     for (let i = 0; i < ready.length; i += LOOK_BATCH) chunks.push(ready.slice(i, i + LOOK_BATCH));
 
-    const fresh = {};
     let error = null;
     const results = await Promise.allSettled(
       chunks.map(async (chunk) => {
@@ -701,20 +723,25 @@ async function judgePictures(items, s, stamp, textVerdicts, tabId) {
     }
     if (Object.keys(fresh).length) await writeCache(fresh, stamp, "i:");
     if (error) await chrome.storage.local.set({ lastError: { msg: "Images: " + error, at: Date.now() } });
-
-    // A picture that couldn't be loaded leaves the text verdict as it was, and lets a
-    // picture-only post through. One whose request failed is asked about again later.
-    const push = {};
-    for (const v of loaded) {
-      if (fresh[v.id]) push[v.id] = combine(textVerdicts[v.id], fresh[v.id]);
-      else if (!textVerdicts[v.id] && !v.imageData) push[v.id] = { tag: null, why: "", scores: {}, source: "image" };
-    }
-    if (tabId != null && Object.keys(push).length) {
-      await chrome.tabs.sendMessage(tabId, { type: "verdicts", verdicts: push }).catch(() => {});
-    }
+  } catch (e) {
+    console.warn("picture pass failed", e);
   } finally {
     items.forEach((v) => lookInFlight.delete(v.id));
   }
+
+  // Every item gets an answer, since the tab is holding it blurred until it does. No picture
+  // verdict falls back to the text one; a picture-only post whose request failed is let
+  // through for now and asked about again later, and one with no usable picture just passes.
+  const retryAt = Math.max(lookPausedUntil, Date.now() + 60_000);
+  const push = {};
+  for (const v of loaded) {
+    const text = textVerdicts[v.id];
+    if (fresh[v.id]) push[v.id] = combine(text, fresh[v.id]);
+    else if (text) push[v.id] = text;
+    else if (!v.imageData) push[v.id] = { tag: null, why: "", scores: {}, source: "image" };
+    else push[v.id] = { tag: null, why: "", scores: {}, source: "image", provisional: true, retryAt };
+  }
+  await pushVerdicts(tabId, push);
 }
 
 /* -------------------------------------------------------------- test call */
@@ -842,7 +869,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return false;
 });
 
+// "Blur until judged" became the default after installs had already saved it as off. Move
+// them over once; the flag keeps a later "off" from being undone by the next update.
+async function migrateBlurUntilJudged() {
+  const { settings, blurUntilJudgedMigrated } = await chrome.storage.local.get(["settings", "blurUntilJudgedMigrated"]);
+  if (blurUntilJudgedMigrated) return;
+  await chrome.storage.local.set({
+    blurUntilJudgedMigrated: true,
+    ...(settings && { settings: { ...settings, hideUntilChecked: true } }),
+  });
+}
+
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
+  await migrateBlurUntilJudged();
   // The free tier no longer has a per-install daily limit: drop any pause or count left behind.
   if (reason === "update") await chrome.storage.local.remove(["freePausedUntil", "freeUsage"]);
   if (reason !== "install") return;
@@ -852,4 +891,4 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
 });
 
 // Exported for the offline shape test in test/validate.mjs. Unused at runtime.
-export { buildRequest, verdictFrom, heuristicVerdict, buildLookRequest, toWire, lookVerdictFrom, combine, decisionsModel, DEFAULT_SETTINGS };
+export { buildRequest, verdictFrom, heuristicVerdict, buildLookRequest, toWire, lookVerdictFrom, combine, decisionsModel, migrateBlurUntilJudged, DEFAULT_SETTINGS };

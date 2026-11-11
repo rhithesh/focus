@@ -1,4 +1,4 @@
-# Feed Filter — goal-aligned feeds
+# Focus — goal-aligned feeds
 
 A Chrome extension that blurs YouTube videos, X posts and LinkedIn posts that are
 clickbait, spam, or irrelevant to goals you write yourself. Hover one and the blur lifts so you can read
@@ -91,13 +91,13 @@ lower gate makes bait get tagged `SPAM`, which is the right call for the wrong
 reason. The displayed confidence is always the one belonging to the signal that
 decided — a `SPAM` verdict shows none, because nouls don't carry a confidence field.
 
-## Pictures (experimental)
+## Pictures (on by default, still marked experimental by TypeSafe)
 
-Turn on **Also judge thumbnails and post pictures** in settings (off by default) and a
-second pass looks at each item's picture: the YouTube thumbnail (`i.ytimg.com/vi/<id>/hqdefault.jpg`),
+A second pass looks at each item's picture: the YouTube thumbnail (`i.ytimg.com/vi/<id>/hqdefault.jpg`),
 or the first photo, video poster or link card on an X or LinkedIn post. It uses
 [Jev's image input](https://docs.typesafe.ai/images), new in Jev 1.14 and still marked
-experimental by TypeSafe.
+experimental by TypeSafe, so it ships on but the **Also judge thumbnails and post
+pictures** setting can turn it off.
 
 - **A separate request.** Any request with an image runs in Jev's long-context mode,
   which TypeSafe says is slower and less accurate, so pictures never ride along with the
@@ -131,6 +131,17 @@ link exactly as it normally would. Nothing is permanently dismissed and nothing 
 removed from the layout. Blur strength is a slider in settings — drop it to 0 to
 turn the frosting off entirely.
 
+Items are also blurred until they've been judged, so bait never flashes up first. It's
+on by default, with a switch in settings:
+
+- The blur comes from a stylesheet rule, so an item has it from its first paint. The same
+  rule spins a small ring on each pending item, so "waiting on the model" is visible.
+- An item clears when its text verdict is in and, with picture checks on, its picture
+  verdict too. Hover peeks at a pending item just as it does at a flagged one.
+- The feed always opens up again. A model request times out after 15 seconds and keyword
+  rules stand in, an item with nothing to judge clears after 3 seconds, and anything
+  still unjudged clears at 20 seconds. A verdict that lands later can still blur it.
+
 ## Providers
 
 Both speak the identical TypeSafe request/response shape:
@@ -157,7 +168,7 @@ invalidates itself. **Clear cached verdicts** in settings forces a re-judge.
 manifest.json     MV3 manifest
 background.js     batching, Jev calls, verdict logic, cache
 content.js        per-site adapters (YouTube, X, LinkedIn), extraction, blur, on-page switch
-content.css       the blur veil
+content.css       the blur veil (the pending blur is generated in content.js)
 options.*         goals, key, surfaces, thresholds, test call
 popup.*           on/off, per-page counts, errors
 test/validate.mjs offline schema + threshold checks (node test/validate.mjs)
@@ -191,8 +202,8 @@ Run both before trusting a change to the veil behaviour or the question rubrics.
 ## Known limits
 
 - Unless picture checks are on, thumbnails are never examined — a clean title over a
-  screaming thumbnail gets through. With them on, a picture's blur can land a beat
-  after the text verdicts, and Jev's image input is still experimental.
+  screaming thumbnail gets through. With them on and blur-until-judged off, a picture's
+  blur can land a beat after the text verdicts. Jev's image input is still experimental.
 - Hover-to-clear needs a pointer. On a touchscreen there is no hover state, so a
   tap goes straight through to the video.
 - Shorts are filtered as tiles in feeds and shelves. The immersive `/shorts/`

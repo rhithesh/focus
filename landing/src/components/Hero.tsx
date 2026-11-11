@@ -153,7 +153,7 @@ export function Hero() {
           className="ff-slide mx-auto mt-7 max-w-[560px] text-[17px] leading-relaxed text-muted sm:text-[18px]"
           style={{ "--d": "0.3s" } as React.CSSProperties}
         >
-          Write down what you&rsquo;re on these sites for. Feed Filter blurs the clickbait, the scams and
+          Write down what you&rsquo;re on these sites for. Focus blurs the clickbait, the scams and
           everything off-goal. Hover anything to see it anyway.
         </p>
 

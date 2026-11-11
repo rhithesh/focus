@@ -12,7 +12,7 @@ const UPDATED = "October 26, 2026";
 
 export const metadata: Metadata = {
   title: "Privacy policy",
-  description: "What the Feed Filter Chrome extension reads, where it sends it, and what is kept.",
+  description: "What the Focus Chrome extension reads, where it sends it, and what is kept.",
   alternates: { canonical: "/privacy" },
 };
 
@@ -35,7 +35,7 @@ export default function Privacy() {
   return (
     <>
       <header className="mx-auto max-w-[720px] px-5 pt-8">
-        <Link href="/" aria-label="Feed Filter, home">
+        <Link href="/" aria-label="Focus, home">
           <Logo className="text-[16px]" />
         </Link>
       </header>
