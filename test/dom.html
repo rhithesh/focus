@@ -33,6 +33,13 @@
         if (!cb) return;
         if (msg.type === "settings") return void setTimeout(() => cb(SETTINGS), 0);
         if (msg.type === "judge") {
+          window.__judgeCalls = (window.__judgeCalls || 0) + 1;
+          if (window.__judgeMode === "hang") return;
+          if (window.__judgeMode === "fail") {
+            // A service worker that died mid-request: lastError set, no response.
+            chrome.runtime.lastError = { message: "The message port closed." };
+            return void setTimeout(() => { cb(undefined); chrome.runtime.lastError = null; }, 0);
+          }
           const verdicts = {};
           for (const v of msg.videos) verdicts[v.id] = VERDICTS[v.id] || { tag:null, why:"", scores:{} };
           return void setTimeout(() => cb({ verdicts, settings: SETTINGS }), 0);

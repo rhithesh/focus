@@ -5,7 +5,7 @@ globalThis.chrome = {
   runtime: { onMessage: { addListener() {} }, onInstalled: { addListener() {} }, openOptionsPage() {} },
 };
 
-const { buildRequest, verdictFrom, heuristicVerdict, buildLookRequest, toWire, lookVerdictFrom, combine, decisionsModel, DEFAULT_SETTINGS } =
+const { buildRequest, verdictFrom, heuristicVerdict, buildLookRequest, toWire, lookVerdictFrom, combine, decisionsModel, migrateBlurUntilJudged, DEFAULT_SETTINGS } =
   await import("../background.js");
 
 let fails = 0;
@@ -76,8 +76,29 @@ ok(heuristicVerdict(videos[3], s).tag === "CLICK-BAIT", "LinkedIn broetry ending
 ok(heuristicVerdict(videos[2], s).tag === null, "plain technical X post -> allowed");
 ok(heuristicVerdict({ title: "99% of developers don't know these VS Code tricks. The 4th one will blow your mind 🤯🧵" }, s).tag === "CLICK-BAIT", "X thread bait -> CLICK-BAIT");
 
+console.log("\n-- blur until judged --");
+ok(DEFAULT_SETTINGS.hideUntilChecked === true, "on by default");
+{
+  const store = { settings: { goals: "keep me", hideUntilChecked: false } };
+  const realLocal = chrome.storage.local;
+  chrome.storage.local = {
+    get: async (keys) => Object.fromEntries(keys.map((k) => [k, store[k]])),
+    set: async (patch) => void Object.assign(store, patch),
+  };
+  await migrateBlurUntilJudged();
+  ok(store.settings.hideUntilChecked === true && store.settings.goals === "keep me", "an install that saved it as off is moved over, other settings intact");
+  store.settings.hideUntilChecked = false;
+  await migrateBlurUntilJudged();
+  ok(store.settings.hideUntilChecked === false, "turning it off afterwards survives the next update");
+  delete store.settings;
+  delete store.blurUntilJudgedMigrated;
+  await migrateBlurUntilJudged();
+  ok(store.blurUntilJudgedMigrated === true && !store.settings, "a fresh install is marked, with no settings written");
+  chrome.storage.local = realLocal;
+}
+
 console.log("\n-- image pass --");
-ok(DEFAULT_SETTINGS.lookAtImages === false, "image pass is off by default (Jev's image input is experimental)");
+ok(DEFAULT_SETTINGS.lookAtImages === true, "image pass is on by default (picture judging catches bait thumbnails and scam graphics)");
 const pics = [
   { ...videos[0], imageData: "AAAA" },
   { id: "x:1790000000000000009", platform: "x", title: "", author: "Photo Account", meta: "", imageData: "BBBB" },
